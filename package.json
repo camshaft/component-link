@@ -1,0 +1,27 @@
+{
+  "name": "component-link",
+  "version": "0.1.0",
+  "description": "Link functionality for component",
+  "main": "index.js",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/CamShaft/component-link.git"
+  },
+  "keywords": [
+    "component",
+    "link"
+  ],
+  "author": "Cameron Bytheway <bytheway.cameron@gmail.com>",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/CamShaft/component-link/issues"
+  },
+  "dependencies": {
+    "commander": "~2.1.0",
+    "component": "~0.18.0",
+    "graceful-fs": "~2.0.1",
+    "rimraf": "~2.2.5",
+    "mkdirp": "~0.3.5",
+    "slide": "~1.1.5"
+  }
+}

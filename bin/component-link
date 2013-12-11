@@ -1,0 +1,228 @@
+#!/usr/bin/env node
+
+/**
+ * Module dependencies.
+ */
+
+var program = require('commander');
+var component = require('component');
+var utils = component.utils;
+var resolve = require('path').resolve;
+var path = require('path');
+var fs = require('fs');
+var exists = fs.existsSync || path.existsSync;
+var symlink = require('../lib/utils').symlink;
+
+// usage
+
+program
+  .usage('[package ...]')
+  .option('-R, --registry <path>', 'directory to store the registry', resolve(__dirname, '../.registry'))
+  .option('-d, --dev', 'install development dependencies')
+  .option('-r, --remotes <urls>', 'remotes to try installing from')
+  .option('-f, --force', 'force installation even if previously installed')
+  .option('-p, --proxy <proxy>', 'use a proxy, eg. http://localhost:3128')
+  .option('-v, --verbose', 'verbose output');
+
+// examples
+
+program.on('--help', function(){
+  console.log('  Examples:');
+  console.log();
+  console.log('    # Links current project into registry');
+  console.log('    $ component link');
+  console.log();
+  console.log('    # Links component/tip into current project');
+  console.log('    $ component link component/tip');
+  console.log();
+});
+
+// parse argv
+
+program.parse(process.argv);
+
+var pkgs = program.args;
+
+// register the cwd
+
+if (!pkgs.length) return register(process.cwd(), program.registry);
+
+// link packages to cwd
+
+pkgs.forEach(function(pkg) {
+  lookup(pkg, process.cwd(), program.registry);
+});
+
+/**
+ * Register the package so it can be linked by others
+ */
+
+function register(from, registry) {
+  var conf = loadConfig(from);
+  var name = conf.repo.replace('/', '-');
+  var target = resolve(registry, name);
+
+  console.log();
+  utils.log('link', conf.repo);
+  symlink(from, target, function(err) {
+    if (err) utils.fatal(err.message);
+    utils.log('complete', target);
+  });
+}
+
+/**
+ * Link a registered package
+ */
+
+function lookup(pkg, target, registry) {
+  var from = resolvePkg(pkg, registry);
+  var to = resolve(target, 'components', pkg.replace('/', '-'));
+
+  utils.log('link', pkg);
+  symlink(from, to, function(err) {
+    if (err) utils.fatal(err.message);
+    utils.log('complete', from + ' -> ' + path.relative(target, to));
+    var pkgs = deps(loadConfig(from));
+    pkgs.forEach(install);
+  });
+}
+
+/**
+ * Resolve a package from the registry
+ */
+
+function resolvePkg(pkg, registry) {
+  var pkgname = pkg.replace('/', '-');
+  var from = resolve(registry, pkgname);
+
+  if (!exists(from)) {
+    utils.fatal(pkg + ' has not been registered\n' +
+    '               Try running `component link` in the ' + pkg + ' directory first');
+  }
+
+  return from;
+}
+
+/**
+ * Load a component.json file at path
+ */
+
+function loadConfig(path) {
+  path = resolve(path, 'component.json');
+
+  // component.json required
+  if (!exists(path)) utils.fatal('missing ' + path);
+
+  var conf = require(path);
+
+  // implicit remotes
+
+  conf.remotes = conf.remotes || [];
+
+  // explicit remotes
+
+  if (program.remotes) {
+    conf.remotes = program.remotes.split(',').concat(conf.remotes);
+  }
+
+  conf.remotes = conf.remotes.concat('https://raw.github.com');
+
+  // load json
+  return conf;
+}
+
+/**
+ * Find the dependencies for the package
+ */
+
+function deps(conf) {
+  var pkgs = [];
+  if (conf.dependencies) {
+    pkgs = normalize(conf.dependencies);
+  }
+
+  if (conf.development && program.dev) {
+    pkgs = pkgs.concat(normalize(conf.development));
+  }
+
+  if (!conf.local) return pkgs;
+
+  conf.local.forEach(function(pkg) {
+    try {
+      var deps = component.dependenciesOf(pkg, conf.paths);
+      deps.map(normalize).forEach(function(deps) {
+        pkgs = pkgs.concat(deps);
+      });
+    } catch (err) {
+      utils.fatal(err.message);
+    }
+  });
+
+  return pkgs;
+}
+
+/**
+ * Normalize a list of dependencies
+ */
+
+function normalize(deps) {
+  return Object.keys(deps).map(function(name){
+    return {
+      name: name,
+      version: deps[name] || 'master'
+    };
+  });
+}
+
+/**
+ * Install a package
+ */
+
+function install(conf) {
+  var pkg = component.install(conf.name, conf.version, {
+    dest: 'components',
+    force: program.force,
+    dev: program.dev,
+    proxy: program.proxy,
+    remotes: conf.remotes,
+    concurrency: 10
+  });
+
+  report(pkg);
+
+  pkg.install();
+}
+
+/**
+ * Report progress on a package installation
+ */
+
+function report(pkg, options) {
+  options = options || {};
+  if (pkg.inFlight) return;
+  utils.log('install', pkg.name + '@' + pkg.version);
+
+  pkg.on('error', function(err){
+    if (err.fatal) utils.fatal(err.message);
+    utils.warn('warning', err.message);
+  });
+
+  if (program.verbose) {
+    pkg.on('dep', function(dep){
+      utils.log('dep', dep.name + '@' + dep.version);
+      report(dep, options);
+    });
+
+    pkg.on('exists', function(dep){
+      utils.log('exists', dep.name + '@' + dep.version);
+    });
+
+    pkg.on('file', function(file){
+      utils.log('fetch', pkg.name + ':' + file);
+    });
+  }
+
+  pkg.on('end', function(){
+    utils.log('complete', pkg.name);
+  });
+}
